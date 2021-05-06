@@ -4,16 +4,33 @@ use crate::cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, InputCallbackInfo, Sample, SampleFormat, Stream, StreamConfig, SupportedStreamConfig,
 };
+use cpal::{BuildStreamError, PlayStreamError, SupportedStreamConfigsError};
 use rustfft::{num_complex::Complex, FftPlanner};
 
 pub use cpal;
 
-pub struct Frquencies {
+#[derive(Debug, thiserror::Error)]
+pub enum BuildSpectrometerError {
+    #[error("{0}")]
+    Stream(#[from] BuildStreamError),
+    #[error("{0}")]
+    Play(#[from] PlayStreamError),
+    #[error("{0}")]
+    Configs(#[from] SupportedStreamConfigsError),
+    #[error("No config available for device")]
+    NoConfig,
+    #[error("No device available")]
+    NoDevice,
+}
+
+pub type BuildSpectrometerResult = Result<Spectrometer, BuildSpectrometerError>;
+
+pub struct Spectrum {
     amps: Vec<Complex<f32>>,
     sample_rate: u32,
 }
 
-impl Frquencies {
+impl Spectrum {
     pub fn bucket_width(&self) -> f32 {
         self.sample_rate as f32 / self.amps.len() as f32
     }
@@ -42,7 +59,7 @@ impl Frquencies {
     }
 }
 
-pub struct InputSpectrum {
+pub struct Spectrometer {
     _stream: Stream,
     recv: mpsc::Receiver<f32>,
     buffer: VecDeque<Complex<f32>>,
@@ -51,30 +68,49 @@ pub struct InputSpectrum {
     max_freq: f32,
 }
 
-impl InputSpectrum {
-    pub fn from_default_device(max_freq: f32) -> Self {
-        let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .expect("no input device available");
-        Self::from_device(max_freq, &device)
+pub struct SpectrometerBuilder<'a> {
+    pub max_freq: f32,
+    pub device: Option<&'a Device>,
+    pub config: Option<SupportedStreamConfig>,
+}
+
+impl<'a> SpectrometerBuilder<'a> {
+    pub fn max_freq(self, max_freq: f32) -> Self {
+        SpectrometerBuilder { max_freq, ..self }
     }
-    pub fn from_device(max_freq: f32, device: &Device) -> Self {
-        let mut supported_configs_range = device
-            .supported_input_configs()
-            .expect("error while querying configs");
-        let supported_config = supported_configs_range
-            .next()
-            .expect("no supported config?!")
-            .with_max_sample_rate();
-        Self::from_device_and_config(max_freq, device, supported_config)
+    pub fn device(self, device: &'a Device) -> Self {
+        SpectrometerBuilder {
+            device: Some(device),
+            ..self
+        }
     }
-    pub fn from_device_and_config(
-        max_freq: f32,
-        device: &Device,
-        config: SupportedStreamConfig,
-    ) -> Self {
-        let err_fn = |err| eprintln!("an error occurred on the input audio stream: {}", err);
+    pub fn config(self, config: SupportedStreamConfig) -> Self {
+        SpectrometerBuilder {
+            config: Some(config),
+            ..self
+        }
+    }
+    pub fn build(self) -> BuildSpectrometerResult {
+        let default_device;
+        let device = if let Some(device) = self.device {
+            device
+        } else {
+            let host = cpal::default_host();
+            default_device = host
+                .default_input_device()
+                .ok_or(BuildSpectrometerError::NoDevice)?;
+            &default_device
+        };
+        let config = if let Some(config) = self.config {
+            config
+        } else {
+            let mut supported_configs_range = device.supported_input_configs()?;
+            supported_configs_range
+                .next()
+                .ok_or(BuildSpectrometerError::NoConfig)?
+                .with_max_sample_rate()
+        };
+        let err_fn = |err| eprintln!("An error occurred on the input audio stream: {}", err);
         let sample_format = config.sample_format();
         let config: StreamConfig = config.into();
         let (send, recv) = mpsc::channel();
@@ -84,7 +120,7 @@ impl InputSpectrum {
                     &config,
                     move |data: &[$sample], _: &InputCallbackInfo| {
                         for &s in data {
-                            send.send(s.to_f32()).unwrap()
+                            let _ = send.send(s.to_f32());
                         }
                     },
                     err_fn,
@@ -95,23 +131,35 @@ impl InputSpectrum {
             SampleFormat::F32 => input_stream!(f32),
             SampleFormat::I16 => input_stream!(i16),
             SampleFormat::U16 => input_stream!(u16),
-        }
-        .unwrap();
+        }?;
 
-        stream.play().unwrap();
+        stream.play()?;
 
-        let mut input = InputSpectrum {
+        let mut input = Spectrometer {
             _stream: stream,
             recv,
             buffer: VecDeque::new(),
             channels: config.channels,
             sample_rate: config.sample_rate.0,
-            max_freq,
+            max_freq: self.max_freq,
         };
         input
             .buffer
             .resize(input.buffer_size(), Complex::new(0.0, 0.0));
-        input
+        Ok(input)
+    }
+}
+
+impl Spectrometer {
+    pub fn builder<'a>() -> SpectrometerBuilder<'a> {
+        SpectrometerBuilder {
+            max_freq: 4000.0,
+            device: None,
+            config: None,
+        }
+    }
+    pub fn from_default_device(max_freq: f32) -> BuildSpectrometerResult {
+        Self::builder().max_freq(max_freq).build()
     }
     pub fn sample_size(&self) -> usize {
         (self.max_freq * 2.0).round() as usize
@@ -121,19 +169,15 @@ impl InputSpectrum {
     }
 }
 
-impl Default for InputSpectrum {
-    /// Uses a default maximum frequency of 4000 hz
+impl Default for Spectrometer {
+    /// Uses the default device and a maximum frequency of 4000 hz
     fn default() -> Self {
-        let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .expect("no input device available");
-        Self::from_device(4000.0, &device)
+        Self::from_default_device(4000.0).unwrap()
     }
 }
 
-impl Iterator for InputSpectrum {
-    type Item = Frquencies;
+impl Iterator for Spectrometer {
+    type Item = Spectrum;
     fn next(&mut self) -> Option<Self::Item> {
         for (i, s) in self.recv.try_iter().enumerate() {
             if i % self.channels as usize == 0 {
@@ -151,7 +195,7 @@ impl Iterator for InputSpectrum {
         let input_start = buffer.len() - sample_size;
         let mut amps = buffer[input_start..].to_vec();
         fft.process(&mut amps);
-        Some(Frquencies {
+        Some(Spectrum {
             amps,
             sample_rate: self.sample_rate,
         })

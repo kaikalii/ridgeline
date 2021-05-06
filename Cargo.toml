@@ -7,3 +7,4 @@ version = '0.1.0'
 [dependencies]
 cpal = '0.13'
 rustfft = '6'
+thiserror = '1'
