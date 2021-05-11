@@ -34,7 +34,10 @@ impl Spectrum {
     pub fn bucket_width(&self) -> f32 {
         self.sample_rate as f32 / self.amps.len() as f32
     }
-    fn amplitude_impl(&self, freq: f32, normalize: bool) -> f32 {
+    fn frequency_at(&self, i: usize) -> f32 {
+        i as f32 * self.bucket_width()
+    }
+    pub fn amplitude(&self, freq: f32) -> f32 {
         let delta = self.bucket_width();
         let ratio = freq / delta;
         if ratio as usize >= self.amps.len() {
@@ -43,58 +46,24 @@ impl Spectrum {
         let floor = ratio.floor();
         let l = floor as usize;
         let r = ratio.ceil() as usize as usize;
-        let mut left = self.amps[l].norm();
-        let mut right = self.amps[r].norm();
-        if normalize {
-            left *= bucket_normal(l, self.amps.len());
-            right *= bucket_normal(r, self.amps.len());
-        }
+        let left = self.amps[l].norm() / self.frequency_at(l);
+        let right = self.amps[r].norm() / self.frequency_at(r);
         let param = ratio - floor;
         (1.0 - param) * left + param * right
     }
-    pub fn amplitude_unnormalized(&self, freq: f32) -> f32 {
-        self.amplitude_impl(freq, false)
-    }
-    pub fn amplitude(&self, freq: f32) -> f32 {
-        self.amplitude_impl(freq, true)
-    }
-    fn max_impl(
-        &self,
-        amp_map: impl Fn(usize, f32) -> f32,
-        amp_filter: impl Fn(f32) -> bool,
-    ) -> f32 {
+    pub fn max(&self) -> f32 {
         let bucket = self
             .amps
             .iter()
             .take(self.amps.len() / 2)
             .map(|a| a.norm())
             .enumerate()
-            .map(|(i, a)| (i, amp_map(i, a)))
-            .filter(|&(_, a)| amp_filter(a))
+            .map(|(i, a)| (i, a / self.frequency_at(i)))
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
             .unwrap()
             .0;
         bucket as f32 * self.bucket_width()
     }
-    pub fn max_unnormalized(&self) -> f32 {
-        self.max_impl(|_, a| a, |_| true)
-    }
-    pub fn max(&self) -> f32 {
-        self.max_impl(|i, a| a * bucket_normal(i, self.amps.len()), |_| true)
-    }
-    pub fn max_unnormalized_above(&self, threshold: f32) -> f32 {
-        self.max_impl(|_, a| a, |a| a > threshold)
-    }
-    pub fn max_above(&self, threshold: f32) -> f32 {
-        self.max_impl(
-            |i, a| a * bucket_normal(i, self.amps.len()),
-            |a| a > threshold,
-        )
-    }
-}
-
-fn bucket_normal(i: usize, len: usize) -> f32 {
-    (i + 1) as f32 / len as f32
 }
 
 pub struct Spectrometer {
