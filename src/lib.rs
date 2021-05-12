@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::mpsc, usize};
+use std::{collections::VecDeque, ops::RangeBounds, sync::mpsc, usize};
 
 use crate::cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -57,17 +57,21 @@ impl Spectrum {
         let param = ratio - floor;
         (1.0 - param) * left + param * right
     }
-    pub fn max(&self) -> f32 {
+    pub fn max_in_range(&self, range: impl RangeBounds<f32>) -> f32 {
         let bucket = self
             .amps
             .iter()
             .take(self.amps.len() / 2)
             .enumerate()
+            .filter(|&(i, _)| range.contains(&self.frequency_at(i)))
             .map(|(i, a)| (i, a / self.frequency_at(i)))
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
             .unwrap()
             .0;
         bucket as f32 * self.bucket_width()
+    }
+    pub fn max(&self) -> f32 {
+        self.max_in_range(..)
     }
 }
 
