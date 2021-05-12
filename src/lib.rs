@@ -13,6 +13,8 @@ use crate::cpal::{
 use cpal::{BuildStreamError, PlayStreamError, SupportedStreamConfigsError};
 use rustfft::{num_complex::Complex, FftPlanner};
 
+#[doc(inline)]
+/// Alias for cpal
 pub use cpal;
 
 /// A error encountered when trying to build a [`Spectrometer`]
