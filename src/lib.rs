@@ -58,7 +58,7 @@ impl Spectrum {
         self.sample_rate as f32 / self.amps.len() as f32
     }
     fn frequency_at(&self, i: usize) -> f32 {
-        i as f32 * self.bucket_width()
+        (i + 1) as f32 * self.bucket_width()
     }
     /// Get the amplitude at some frequency
     ///
