@@ -10,7 +10,7 @@ fn main() {
     for spectrum in input {
         let calibrate = silence.is_empty();
         println!("-----------------------------------------");
-        println!("max: {}", spectrum.max());
+        println!("max: {}", spectrum.dominant());
         for i in 0..SEGMENTS {
             let freq = i as f32 * MAX_FREQ / SEGMENTS as f32;
             let amp = spectrum.amplitude(freq);

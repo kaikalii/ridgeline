@@ -72,28 +72,28 @@ impl Spectrum {
         let floor = ratio.floor();
         let l = floor as usize;
         let r = ratio.ceil() as usize as usize;
-        let left = self.amps[l] / self.frequency_at(l);
-        let right = self.amps[r] / self.frequency_at(r);
+        let left = self.amps[l];
+        let right = self.amps[r];
         let param = ratio - floor;
         (1.0 - param) * left + param * right
     }
     /// Get the frequency with the maximum amplitude within some range of frequencies
-    pub fn max_in_range(&self, range: impl RangeBounds<f32>) -> f32 {
+    pub fn dominant_in_range(&self, range: impl RangeBounds<f32>) -> f32 {
         let bucket = self
             .amps
             .iter()
             .take(self.amps.len() / 2)
             .enumerate()
             .filter(|&(i, _)| range.contains(&self.frequency_at(i)))
-            .map(|(i, a)| (i, a / self.frequency_at(i)))
+            .map(|(i, a)| (i, a))
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
             .unwrap()
             .0;
         bucket as f32 * self.bucket_width()
     }
     /// Get the frequency with the maximum amplitude
-    pub fn max(&self) -> f32 {
-        self.max_in_range(..)
+    pub fn dominant(&self) -> f32 {
+        self.dominant_in_range(..)
     }
 }
 
