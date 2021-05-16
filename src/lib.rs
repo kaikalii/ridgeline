@@ -38,19 +38,20 @@ pub enum BuildSpectrometerError {
 }
 
 /// A result type for trying to build a [`Spectrometer`]
-pub type BuildSpectrometerResult = Result<Spectrometer, BuildSpectrometerError>;
+pub type BuildSpectrometerResult<const SIZE: usize> =
+    Result<Spectrometer<SIZE>, BuildSpectrometerError>;
 
 /// The freqency spectrum of the input at some time
-pub struct Spectrum {
-    amps: Vec<f32>,
+pub struct Spectrum<const SIZE: usize> {
+    amps: [f32; SIZE],
     sample_rate: u32,
 }
 
-impl Spectrum {
+impl<const SIZE: usize> Spectrum<SIZE> {
     /// Create a new silent spectrum
-    pub fn silent(sample_rate: u32, max_freq: f32) -> Self {
+    pub fn silent(sample_rate: u32) -> Self {
         Spectrum {
-            amps: vec![0.0; (max_freq * 2.0).round() as usize],
+            amps: [0.0; SIZE],
             sample_rate,
         }
     }
@@ -100,14 +101,13 @@ impl Spectrum {
 /// An iterator that produces frequency spectra from an audio input device
 ///
 /// At any moment, [`Spectrometer::read`] can be called to get the [`Spectrum`] of the current input.
-pub struct Spectrometer {
+pub struct Spectrometer<const SIZE: usize> {
     _stream: Stream,
     recv: mpsc::Receiver<f32>,
     buffer: VecDeque<Complex<f32>>,
     sample_rate: u32,
     channels: u16,
-    max_freq: f32,
-    calibration: Option<Spectrum>,
+    calibration: Option<Spectrum<SIZE>>,
 }
 
 /**
@@ -118,20 +118,14 @@ Created with [`Spectrometer::builder`]
 At any moment, [`Spectrometer::read`] may be called to get the [`Spectrum`] of
 the current audio input.
 */
-pub struct SpectrometerBuilder<'a> {
-    /// The maximum frequency can be detected
-    pub max_freq: f32,
+pub struct SpectrometerBuilder<'a, const SIZE: usize> {
     /// The input device to use. If not set, the default device will be used.
     pub device: Option<&'a Device>,
     /// The stream configuration to be used. If not set, the default will be used.
     pub config: Option<SupportedStreamConfig>,
 }
 
-impl<'a> SpectrometerBuilder<'a> {
-    /// Set the maximum frequency that can be detected
-    pub fn max_freq(self, max_freq: f32) -> Self {
-        SpectrometerBuilder { max_freq, ..self }
-    }
+impl<'a, const SIZE: usize> SpectrometerBuilder<'a, SIZE> {
     /// Set the input device
     pub fn device(self, device: &'a Device) -> Self {
         SpectrometerBuilder {
@@ -147,7 +141,7 @@ impl<'a> SpectrometerBuilder<'a> {
         }
     }
     /// Build the [`Spectrometer`]
-    pub fn build(self) -> BuildSpectrometerResult {
+    pub fn build(self) -> BuildSpectrometerResult<SIZE> {
         let default_device;
         let device = if let Some(device) = self.device {
             device
@@ -198,7 +192,6 @@ impl<'a> SpectrometerBuilder<'a> {
             buffer: VecDeque::new(),
             channels: config.channels,
             sample_rate: config.sample_rate.0,
-            max_freq: self.max_freq,
             calibration: None,
         };
         input
@@ -208,38 +201,33 @@ impl<'a> SpectrometerBuilder<'a> {
     }
 }
 
-impl Spectrometer {
+impl<const SIZE: usize> Spectrometer<SIZE> {
     /// Create a new [`SpectrometerBuilder`]
-    pub fn builder<'a>() -> SpectrometerBuilder<'a> {
+    pub fn builder<'a>() -> SpectrometerBuilder<'a, SIZE> {
         SpectrometerBuilder {
-            max_freq: 4000.0,
             device: None,
             config: None,
         }
     }
     /// Create a spectrometer using the default input device
-    pub fn from_default_device(max_freq: f32) -> BuildSpectrometerResult {
-        Self::builder().max_freq(max_freq).build()
-    }
-    /// Get the number of samples used for frequency analysis
-    pub fn sample_size(&self) -> usize {
-        (self.max_freq * 2.0).round() as usize
+    pub fn from_default_device() -> BuildSpectrometerResult<SIZE> {
+        Self::builder().build()
     }
     /// The amount of time in seconds used to perform frequency analysis
     ///
     /// Note that [`Spectrometer::read`] can be called much more often that this
     pub fn sample_period(&self) -> f32 {
-        self.sample_size() as f32 / self.sample_rate as f32
+        SIZE as f32 / self.sample_rate as f32
     }
     fn buffer_size(&self) -> usize {
-        self.sample_size() * 2
+        SIZE * 2
     }
     /// Use the next few spectra to calibrate a definition of "silence"
     ///
     /// All spectra created after calling this function will have the "silence" spectrum subtracted.
     pub fn calibrate(&mut self) {
         let mut new_calibration = self.raw_next();
-        for _ in 0..self.sample_size() / 10 {
+        for _ in 0..SIZE / 10 {
             let frame = self.raw_next();
             for (c, a) in new_calibration.amps.iter_mut().zip(&frame.amps) {
                 *c = c.max(*a);
@@ -251,34 +239,40 @@ impl Spectrometer {
     pub fn uncalibrate(&mut self) {
         self.calibration = None;
     }
-    fn raw_next(&mut self) -> Spectrum {
+    fn raw_next(&mut self) -> Spectrum<SIZE> {
         for (i, s) in self.recv.try_iter().enumerate() {
             if i % self.channels as usize == 0 {
                 self.buffer.push_back(Complex::new(s, 0.0));
             }
         }
         let buffer_size = self.buffer_size();
-        let sample_size = self.sample_size();
         while self.buffer.len() > buffer_size {
             self.buffer.pop_front();
         }
         let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(sample_size);
+        let fft = planner.plan_fft_forward(SIZE);
         let buffer = self.buffer.make_contiguous();
-        let input_start = buffer.len() - sample_size;
-        let mut amps = buffer[input_start..].to_vec();
-        fft.process(&mut amps);
+        let input_start = buffer.len() - SIZE;
+        let mut complex_amps = [Complex::new(0f32, 0.0); SIZE];
+        for (i, amp) in buffer[input_start..].iter().enumerate() {
+            complex_amps[i] = *amp;
+        }
+        fft.process(&mut complex_amps);
+        let mut amps = [0.0; SIZE];
+        for (i, amp) in complex_amps.iter().enumerate() {
+            let mut amp = amp.norm();
+            if amp.is_nan() {
+                amp = 0.0;
+            }
+            amps[i] = amp;
+        }
         Spectrum {
-            amps: amps
-                .into_iter()
-                .map(Complex::norm)
-                .map(|s| if s.is_nan() { 0.0 } else { s })
-                .collect(),
+            amps,
             sample_rate: self.sample_rate,
         }
     }
     /// Get the [`Spectrum`] at the moment this function called
-    pub fn read(&mut self) -> Spectrum {
+    pub fn read(&mut self) -> Spectrum<SIZE> {
         let mut spectrum = self.raw_next();
         if let Some(min) = &self.calibration {
             for (s, min) in spectrum.amps.iter_mut().zip(&min.amps) {
@@ -289,15 +283,8 @@ impl Spectrometer {
     }
 }
 
-impl Default for Spectrometer {
-    /// Uses the default device and a maximum frequency of 4000 hz
-    fn default() -> Self {
-        Self::from_default_device(4000.0).unwrap()
-    }
-}
-
-impl Iterator for Spectrometer {
-    type Item = Spectrum;
+impl<const SIZE: usize> Iterator for Spectrometer<SIZE> {
+    type Item = Spectrum<SIZE>;
     fn next(&mut self) -> Option<Self::Item> {
         Some(self.read())
     }

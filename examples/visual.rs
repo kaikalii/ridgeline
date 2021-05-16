@@ -5,7 +5,8 @@ use ridgeline::*;
 fn main() {
     const SEGMENTS: usize = 20;
     const MAX_FREQ: f32 = 1000.0;
-    let input = Spectrometer::from_default_device(MAX_FREQ).unwrap();
+    const SAMPLE_SIZE: usize = MAX_FREQ as usize * 2;
+    let input = Spectrometer::<SAMPLE_SIZE>::from_default_device().unwrap();
     let mut silence = Vec::new();
     for spectrum in input {
         let calibrate = silence.is_empty();
