@@ -32,7 +32,7 @@ for spectrum in spectrometer {
 
 use std::{
     collections::VecDeque,
-    ops::RangeBounds,
+    ops::{Bound, RangeBounds},
     sync::mpsc::{self, TryRecvError},
     usize,
 };
@@ -102,6 +102,9 @@ impl<const SIZE: usize> Spectrum<SIZE> {
     pub fn frequency_at(&self, index: usize) -> f32 {
         (index + 1) as f32 * self.bucket_width()
     }
+    fn bucket_at(&self, freq: f32) -> usize {
+        ((freq / self.bucket_width()) as usize).max(1) - 1
+    }
     /// Get the amplitude at some frequency
     ///
     /// Frequencies between FFT bucket bounds are interpolated
@@ -137,6 +140,43 @@ impl<const SIZE: usize> Spectrum<SIZE> {
     pub fn dominant(&self) -> f32 {
         self.dominant_in_range(..)
     }
+    /// Get all spectrum points
+    pub fn aplitudes(&self) -> impl DoubleEndedIterator<Item = SpectrumPoint> + '_ {
+        self.amplitudes_in_range(..)
+    }
+    /// Get all spectrum points within a frequency range
+    pub fn amplitudes_in_range(
+        &self,
+        range: impl RangeBounds<f32>,
+    ) -> impl DoubleEndedIterator<Item = SpectrumPoint> + '_ {
+        let skip = match range.start_bound() {
+            Bound::Included(b) | Bound::Excluded(b) => self.bucket_at(*b),
+            Bound::Unbounded => 0,
+        };
+        let take = match range.end_bound() {
+            Bound::Included(b) => self.bucket_at(*b) - skip + 1,
+            Bound::Excluded(b) => self.bucket_at(*b) - skip,
+            Bound::Unbounded => usize::MAX,
+        };
+        self.amps
+            .iter()
+            .enumerate()
+            .skip(skip)
+            .take(take)
+            .map(move |(i, &amplitude)| SpectrumPoint {
+                frequency: (i + 1) as f32 * self.bucket_width(),
+                amplitude,
+            })
+    }
+}
+
+/// A point on a [`Spectrum`]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
+pub struct SpectrumPoint {
+    /// The frequency
+    pub frequency: f32,
+    /// The amplitude
+    pub amplitude: f32,
 }
 
 /// The result of querying a [`SignalSource`] for a sample
