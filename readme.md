@@ -15,7 +15,7 @@ The [`SignalSource`] trait defines behavior for a signal. [`SystemAudio`] is a
 The aplitude of a given frequency can be queried with [`Spectrum::amplitude`].
 
 # Example: Get the dominant frequency
-```
+```rust
 use std::{thread::sleep, time::Duration};
 
 use ridgeline::*;
