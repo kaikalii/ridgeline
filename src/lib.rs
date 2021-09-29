@@ -55,11 +55,21 @@ impl<const SIZE: usize> Spectrum<SIZE> {
             sample_rate,
         }
     }
-    fn bucket_width(&self) -> f32 {
+    /// Get the sample rate of the time-domain data being sampled
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    /// Get the raw array of FFT buckets
+    pub fn buckets(&self) -> &[f32; SIZE] {
+        &self.amps
+    }
+    /// Get the width in Hz of an FFT bucket in the spectrum
+    pub fn bucket_width(&self) -> f32 {
         self.sample_rate as f32 / self.amps.len() as f32
     }
-    fn frequency_at(&self, i: usize) -> f32 {
-        (i + 1) as f32 * self.bucket_width()
+    /// Get the frequency that corresponds to a certain FFT bucket index
+    pub fn frequency_at(&self, index: usize) -> f32 {
+        (index + 1) as f32 * self.bucket_width()
     }
     /// Get the amplitude at some frequency
     ///
