@@ -30,25 +30,31 @@ for spectrum in spectrometer {
 ```
 */
 
+#[cfg(feature = "input")]
+use std::sync::mpsc::{self, TryRecvError};
 use std::{
     collections::VecDeque,
     ops::{Bound, RangeBounds},
-    sync::mpsc::{self, TryRecvError},
     usize,
 };
 
+#[cfg(feature = "input")]
 use crate::cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    Device, InputCallbackInfo, Sample, SampleFormat, Stream, StreamConfig, SupportedStreamConfig,
+    BuildStreamError, Device, InputCallbackInfo, PlayStreamError, Sample, SampleFormat, Stream,
+    StreamConfig, SupportedStreamConfig, SupportedStreamConfigsError,
 };
-use cpal::{BuildStreamError, PlayStreamError, SupportedStreamConfigsError};
 use rustfft::{num_complex::Complex, FftPlanner};
 
 #[doc(inline)]
+#[cfg(feature = "input")]
+#[cfg_attr(docsrs, doc(cfg(feature = "input")))]
 /// Alias for cpal
 pub use cpal;
 
 /// A error encountered when trying to build a [`SystemAudio`]
+#[cfg(feature = "input")]
+#[cfg_attr(docsrs, doc(cfg(feature = "input")))]
 #[derive(Debug, thiserror::Error)]
 pub enum BuildSystemAudioError {
     /// An error building the audio stream
@@ -69,6 +75,8 @@ pub enum BuildSystemAudioError {
 }
 
 /// A result type for trying to build a [`SystemAudio`]
+#[cfg(feature = "input")]
+#[cfg_attr(docsrs, doc(cfg(feature = "input")))]
 pub type BuildSystemAudioResult = Result<SystemAudio, BuildSystemAudioError>;
 
 /// The freqency spectrum of the input at some time
@@ -141,7 +149,7 @@ impl<const SIZE: usize> Spectrum<SIZE> {
         self.dominant_in_range(..)
     }
     /// Get all spectrum points
-    pub fn aplitudes(&self) -> impl DoubleEndedIterator<Item = SpectrumPoint> + '_ {
+    pub fn amplitudes(&self) -> impl DoubleEndedIterator<Item = SpectrumPoint> + '_ {
         self.amplitudes_in_range(..)
     }
     /// Get all spectrum points within a frequency range
@@ -208,6 +216,8 @@ pub trait SignalSource {
 }
 
 /// A [`SignalSource`] that receives audio samples from the system audio input
+#[cfg(feature = "input")]
+#[cfg_attr(docsrs, doc(cfg(feature = "input")))]
 pub struct SystemAudio {
     _stream: Stream,
     recv: mpsc::Receiver<f32>,
@@ -216,6 +226,7 @@ pub struct SystemAudio {
     curr_channel: u16,
 }
 
+#[cfg(feature = "input")]
 impl SignalSource for SystemAudio {
     fn sample_rate(&self) -> u32 {
         self.sample_rate
@@ -237,6 +248,7 @@ impl SignalSource for SystemAudio {
     }
 }
 
+#[cfg(feature = "input")]
 impl SystemAudio {
     /// Create a new [`SystemAudioBuilder`]
     pub fn builder<'a>() -> SystemAudioBuilder<'a> {
@@ -256,6 +268,8 @@ A builder for a [`SystemAudio`]
 
 Created with [`SystemAudio::builder`]
 */
+#[cfg(feature = "input")]
+#[cfg_attr(docsrs, doc(cfg(feature = "input")))]
 #[derive(Default)]
 pub struct SystemAudioBuilder<'a> {
     /// The input device to use. If not set, the default device will be used.
@@ -264,6 +278,7 @@ pub struct SystemAudioBuilder<'a> {
     pub config: Option<SupportedStreamConfig>,
 }
 
+#[cfg(feature = "input")]
 impl<'a> SystemAudioBuilder<'a> {
     /// Set the input device
     pub fn device(self, device: &'a Device) -> Self {
