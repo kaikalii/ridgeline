@@ -4,7 +4,12 @@
 `ridgeline` is a crate for simplifying frequency spectrum analysis of audio streamed from input devices.
 */
 
-use std::{collections::VecDeque, ops::RangeBounds, sync::mpsc, usize};
+use std::{
+    collections::VecDeque,
+    ops::RangeBounds,
+    sync::mpsc::{self, TryRecvError},
+    usize,
+};
 
 use crate::cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -17,9 +22,9 @@ use rustfft::{num_complex::Complex, FftPlanner};
 /// Alias for cpal
 pub use cpal;
 
-/// A error encountered when trying to build a [`Spectrometer`]
+/// A error encountered when trying to build a [`SystemAudio`]
 #[derive(Debug, thiserror::Error)]
-pub enum BuildSpectrometerError {
+pub enum BuildSystemAudioError {
     /// An error building the audio stream
     #[error("{0}")]
     Stream(#[from] BuildStreamError),
@@ -37,11 +42,11 @@ pub enum BuildSpectrometerError {
     NoDevice,
 }
 
-/// A result type for trying to build a [`Spectrometer`]
-pub type BuildSpectrometerResult<const SIZE: usize> =
-    Result<Spectrometer<SIZE>, BuildSpectrometerError>;
+/// A result type for trying to build a [`SystemAudio`]
+pub type BuildSystemAudioResult = Result<SystemAudio, BuildSystemAudioError>;
 
 /// The freqency spectrum of the input at some time
+#[derive(Clone)]
 pub struct Spectrum<const SIZE: usize> {
     amps: [f32; SIZE],
     sample_rate: u32,
@@ -108,50 +113,107 @@ impl<const SIZE: usize> Spectrum<SIZE> {
     }
 }
 
-/// An iterator that produces frequency spectra from an audio input device
-///
-/// At any moment, [`Spectrometer::read`] can be called to get the [`Spectrum`] of the current input.
-pub struct Spectrometer<const SIZE: usize> {
+/// The result of querying a [`SignalSource`] for a sample
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SignalResult {
+    /// A sample is available
+    Sample(f32),
+    /// A signal will be available
+    Wait,
+    /// The signal has finished
+    End,
+}
+
+/// A single-channel signal source for providing input to a [`Spectrometer`]
+pub trait SignalSource {
+    /// The sample rate of the signal
+    ///
+    /// This is used to derive [`Spectrum`] frequencies
+    fn sample_rate(&self) -> u32;
+    /// Get the next sample
+    fn next(&mut self) -> SignalResult;
+    /// Create a [`Spectrometer`] from this source
+    fn analyze<const SIZE: usize>(self) -> Spectrometer<Self, SIZE>
+    where
+        Self: Sized,
+    {
+        Spectrometer::new(self)
+    }
+}
+
+/// A [`SignalSource`] that receives audio samples from the system audio input
+pub struct SystemAudio {
     _stream: Stream,
     recv: mpsc::Receiver<f32>,
-    buffer: VecDeque<Complex<f32>>,
     sample_rate: u32,
     channels: u16,
-    calibration: Option<Spectrum<SIZE>>,
+    curr_channel: u16,
+}
+
+impl SignalSource for SystemAudio {
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    fn next(&mut self) -> SignalResult {
+        loop {
+            match self.recv.try_recv() {
+                Ok(s) => {
+                    let should_break = self.curr_channel == 0;
+                    self.curr_channel = (self.curr_channel + 1) % self.channels;
+                    if should_break {
+                        break SignalResult::Sample(s);
+                    }
+                }
+                Err(TryRecvError::Empty) => break SignalResult::Wait,
+                Err(TryRecvError::Disconnected) => break SignalResult::End,
+            }
+        }
+    }
+}
+
+impl SystemAudio {
+    /// Create a new [`SystemAudioBuilder`]
+    pub fn builder<'a>() -> SystemAudioBuilder<'a> {
+        SystemAudioBuilder {
+            device: None,
+            config: None,
+        }
+    }
+    /// Create a spectrometer using the default input device
+    pub fn from_default_device() -> BuildSystemAudioResult {
+        Self::builder().build()
+    }
 }
 
 /**
-A builder for a [`Spectrometer`]
+A builder for a [`SystemAudio`]
 
-Created with [`Spectrometer::builder`]
-
-At any moment, [`Spectrometer::read`] may be called to get the [`Spectrum`] of
-the current audio input.
+Created with [`SystemAudio::builder`]
 */
-pub struct SpectrometerBuilder<'a, const SIZE: usize> {
+pub struct SystemAudioBuilder<'a> {
     /// The input device to use. If not set, the default device will be used.
     pub device: Option<&'a Device>,
     /// The stream configuration to be used. If not set, the default will be used.
     pub config: Option<SupportedStreamConfig>,
 }
 
-impl<'a, const SIZE: usize> SpectrometerBuilder<'a, SIZE> {
+impl<'a> SystemAudioBuilder<'a> {
     /// Set the input device
     pub fn device(self, device: &'a Device) -> Self {
-        SpectrometerBuilder {
+        SystemAudioBuilder {
             device: Some(device),
             ..self
         }
     }
     /// Set the stream configuration
     pub fn config(self, config: SupportedStreamConfig) -> Self {
-        SpectrometerBuilder {
+        SystemAudioBuilder {
             config: Some(config),
             ..self
         }
     }
-    /// Build the [`Spectrometer`]
-    pub fn build(self) -> BuildSpectrometerResult<SIZE> {
+    /// Build the [`SystemAudio`]
+    pub fn build(self) -> BuildSystemAudioResult {
         let default_device;
         let device = if let Some(device) = self.device {
             device
@@ -159,7 +221,7 @@ impl<'a, const SIZE: usize> SpectrometerBuilder<'a, SIZE> {
             let host = cpal::default_host();
             default_device = host
                 .default_input_device()
-                .ok_or(BuildSpectrometerError::NoDevice)?;
+                .ok_or(BuildSystemAudioError::NoDevice)?;
             &default_device
         };
         let config = if let Some(config) = self.config {
@@ -168,7 +230,7 @@ impl<'a, const SIZE: usize> SpectrometerBuilder<'a, SIZE> {
             let mut supported_configs_range = device.supported_input_configs()?;
             supported_configs_range
                 .next()
-                .ok_or(BuildSpectrometerError::NoConfig)?
+                .ok_or(BuildSystemAudioError::NoConfig)?
                 .with_max_sample_rate()
         };
         let err_fn = |err| eprintln!("An error occurred on the input audio stream: {}", err);
@@ -196,66 +258,94 @@ impl<'a, const SIZE: usize> SpectrometerBuilder<'a, SIZE> {
 
         stream.play()?;
 
-        let mut input = Spectrometer {
+        Ok(SystemAudio {
             _stream: stream,
             recv,
-            buffer: VecDeque::new(),
             channels: config.channels,
             sample_rate: config.sample_rate.0,
-            calibration: None,
-        };
-        input
-            .buffer
-            .resize(input.buffer_size(), Complex::new(0.0, 0.0));
-        Ok(input)
+            curr_channel: 0,
+        })
     }
 }
 
-impl<const SIZE: usize> Spectrometer<SIZE> {
-    /// Create a new [`SpectrometerBuilder`]
-    pub fn builder<'a>() -> SpectrometerBuilder<'a, SIZE> {
-        SpectrometerBuilder {
-            device: None,
-            config: None,
-        }
+/// An iterator that produces frequency spectra from an audio input device
+///
+/// At any moment, [`Spectrometer::next`] can be called to get the [`Spectrum`] of the current input.
+#[derive(Clone, Default)]
+pub struct Spectrometer<S, const SIZE: usize> {
+    source: S,
+    buffer: VecDeque<Complex<f32>>,
+    calibration: Option<Spectrum<SIZE>>,
+}
+
+impl<S, const SIZE: usize> Spectrometer<S, SIZE>
+where
+    S: SignalSource,
+{
+    /// Create a new `Spectrometer` from a signal source
+    pub fn new(source: S) -> Self {
+        let mut spec = Spectrometer {
+            source,
+            buffer: VecDeque::new(),
+            calibration: None,
+        };
+        spec.buffer
+            .resize(spec.buffer_size(), Complex::new(0.0, 0.0));
+        spec
     }
-    /// Create a spectrometer using the default input device
-    pub fn from_default_device() -> BuildSpectrometerResult<SIZE> {
-        Self::builder().build()
+    /// Get a reference to the source
+    pub fn source(&self) -> &S {
+        &self.source
+    }
+    /// Get a mutable reference to the source
+    pub fn source_mut(&mut self) -> &mut S {
+        &mut self.source
     }
     /// The amount of time in seconds used to perform frequency analysis
     ///
-    /// Note that [`Spectrometer::read`] can be called much more often that this
+    /// Note that [`Spectrometer::next`] can be called much more often that this
     pub fn sample_period(&self) -> f32 {
-        SIZE as f32 / self.sample_rate as f32
+        SIZE as f32 / self.source.sample_rate() as f32
     }
     fn buffer_size(&self) -> usize {
         SIZE * 2
     }
-    /// Use the next few spectra to calibrate a definition of "silence"
+    /// Use the next `n` + 1 spectra to calibrate a definition of "silence"
+    ///
+    /// All spectra created after calling this function will have the "silence" spectrum subtracted.
+    pub fn calibrate_n(&mut self, n: usize) {
+        if let Some(mut new_calibration) = self.raw_next() {
+            for _ in 0..n {
+                if let Some(frame) = self.raw_next() {
+                    for (c, a) in new_calibration.amps.iter_mut().zip(&frame.amps) {
+                        *c = c.max(*a);
+                    }
+                } else {
+                    break;
+                }
+            }
+            self.calibration = Some(new_calibration)
+        }
+    }
+    /// Use the next `SIZE` / 10 + 1 spectra to calibrate a definition of "silence"
     ///
     /// All spectra created after calling this function will have the "silence" spectrum subtracted.
     pub fn calibrate(&mut self) {
-        let mut new_calibration = self.raw_next();
-        for _ in 0..SIZE / 10 {
-            let frame = self.raw_next();
-            for (c, a) in new_calibration.amps.iter_mut().zip(&frame.amps) {
-                *c = c.max(*a);
-            }
-        }
-        self.calibration = Some(new_calibration)
+        self.calibrate_n(SIZE / 10)
     }
-    /// Clear the calibration set by [`Spectrometer::calibrate`]
+    /// Clear the calibration set by [`Spectrometer::calibrate`] or [`Spectrometer::calibrate_n`]
     pub fn uncalibrate(&mut self) {
         self.calibration = None;
     }
-    fn raw_next(&mut self) -> Spectrum<SIZE> {
-        for (i, s) in self.recv.try_iter().enumerate() {
-            if i % self.channels as usize == 0 {
-                self.buffer.push_back(Complex::new(s, 0.0));
+    fn raw_next(&mut self) -> Option<Spectrum<SIZE>> {
+        let buffer_size = self.buffer_size();
+        for _ in 0..buffer_size {
+            match self.source.next() {
+                SignalResult::Sample(s) => self.buffer.push_back(Complex::new(s, 0.0)),
+                SignalResult::Wait => break,
+                SignalResult::End => return None,
             }
         }
-        let buffer_size = self.buffer_size();
         while self.buffer.len() > buffer_size {
             self.buffer.pop_front();
         }
@@ -276,26 +366,25 @@ impl<const SIZE: usize> Spectrometer<SIZE> {
             }
             amps[i] = amp;
         }
-        Spectrum {
+        Some(Spectrum {
             amps,
-            sample_rate: self.sample_rate,
-        }
+            sample_rate: self.source.sample_rate(),
+        })
     }
-    /// Get the [`Spectrum`] at the moment this function called
-    pub fn read(&mut self) -> Spectrum<SIZE> {
-        let mut spectrum = self.raw_next();
+}
+
+impl<S, const SIZE: usize> Iterator for Spectrometer<S, SIZE>
+where
+    S: SignalSource,
+{
+    type Item = Spectrum<SIZE>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut spectrum = self.raw_next()?;
         if let Some(min) = &self.calibration {
             for (s, min) in spectrum.amps.iter_mut().zip(&min.amps) {
                 *s = (*s - min).max(0.0);
             }
         }
-        spectrum
-    }
-}
-
-impl<const SIZE: usize> Iterator for Spectrometer<SIZE> {
-    type Item = Spectrum<SIZE>;
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(self.read())
+        Some(spectrum)
     }
 }
