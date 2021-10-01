@@ -7,10 +7,10 @@ fn main() {
     let audio_input = SystemAudio::from_default_device().unwrap();
     // Create a `Spectrometer` from the audio input stream with 5000 FFT buckets
     // The actual FFT buffer uses SIZE * 2 buckets, but only the lower half is usable
-    let spectrometer = audio_input.analyze::<5000>();
+    let spectrometer = audio_input.analyze(5000);
     // Print the frequency with the highest amplitude
     for spectrum in spectrometer {
-        println!(":{}", spectrum.dominant());
+        println!("{}", spectrum.dominant());
         sleep(Duration::from_millis(10));
     }
 }

@@ -52,16 +52,16 @@ pub type BuildSystemAudioResult = Result<SystemAudio, BuildSystemAudioError>;
 
 /// The freqency spectrum of the input at some time
 #[derive(Clone)]
-pub struct Spectrum<const SIZE: usize> {
-    amps: [f32; SIZE],
+pub struct Spectrum {
+    amps: Vec<f32>,
     sample_rate: u32,
 }
 
-impl<const SIZE: usize> Spectrum<SIZE> {
+impl Spectrum {
     /// Create a new silent spectrum
-    pub fn silent(sample_rate: u32) -> Self {
+    pub fn silent(size: usize, sample_rate: u32) -> Self {
         Spectrum {
-            amps: [0.0; SIZE],
+            amps: vec![0.0; size],
             sample_rate,
         }
     }
@@ -70,7 +70,7 @@ impl<const SIZE: usize> Spectrum<SIZE> {
         self.sample_rate
     }
     /// Get the raw array of FFT buckets
-    pub fn buckets(&self) -> &[f32; SIZE] {
+    pub fn buckets(&self) -> &[f32] {
         &self.amps
     }
     /// Get the width in Hz of an FFT bucket in the spectrum
@@ -178,11 +178,11 @@ pub trait SignalSource {
     /// Get the next sample
     fn next(&mut self) -> SignalResult;
     /// Create a [`Spectrometer`] from this source
-    fn analyze<const SIZE: usize>(self) -> Spectrometer<Self, SIZE>
+    fn analyze(self, size: usize) -> Spectrometer<Self>
     where
         Self: Sized,
     {
-        Spectrometer::new(self)
+        Spectrometer::new(size, self)
     }
 }
 
@@ -325,22 +325,24 @@ impl<'a> SystemAudioBuilder<'a> {
 ///
 /// At any moment, [`Spectrometer::next`] can be called to get the [`Spectrum`] of the current input.
 #[derive(Clone, Default)]
-pub struct Spectrometer<S, const SIZE: usize> {
+pub struct Spectrometer<S> {
     source: S,
     buffer: VecDeque<Complex<f32>>,
-    calibration: Option<Spectrum<SIZE>>,
+    calibration: Option<Spectrum>,
+    size: usize,
 }
 
-impl<S, const SIZE: usize> Spectrometer<S, SIZE>
+impl<S> Spectrometer<S>
 where
     S: SignalSource,
 {
     /// Create a new `Spectrometer` from a signal source
-    pub fn new(source: S) -> Self {
+    pub fn new(size: usize, source: S) -> Self {
         let mut spec = Spectrometer {
             source,
             buffer: VecDeque::new(),
             calibration: None,
+            size,
         };
         spec.buffer
             .resize(spec.buffer_size(), Complex::new(0.0, 0.0));
@@ -358,10 +360,10 @@ where
     ///
     /// Note that [`Spectrometer::next`] can be called much more often that this
     pub fn sample_period(&self) -> f32 {
-        SIZE as f32 / self.source.sample_rate() as f32
+        self.size as f32 / self.source.sample_rate() as f32
     }
     fn buffer_size(&self) -> usize {
-        SIZE * 2
+        self.size * 2
     }
     /// Use the next `n` + 1 spectra to calibrate a definition of "silence"
     ///
@@ -380,17 +382,17 @@ where
             self.calibration = Some(new_calibration)
         }
     }
-    /// Use the next `SIZE` / 10 + 1 spectra to calibrate a definition of "silence"
+    /// Use the next `size` / 10 + 1 spectra to calibrate a definition of "silence"
     ///
     /// All spectra created after calling this function will have the "silence" spectrum subtracted.
     pub fn calibrate(&mut self) {
-        self.calibrate_n(SIZE / 10)
+        self.calibrate_n(self.size / 10)
     }
     /// Clear the calibration set by [`Spectrometer::calibrate`] or [`Spectrometer::calibrate_n`]
     pub fn uncalibrate(&mut self) {
         self.calibration = None;
     }
-    fn raw_next(&mut self) -> Option<Spectrum<SIZE>> {
+    fn raw_next(&mut self) -> Option<Spectrum> {
         let buffer_size = self.buffer_size();
         for _ in 0..buffer_size {
             match self.source.next() {
@@ -403,15 +405,15 @@ where
             self.buffer.pop_front();
         }
         let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(SIZE);
+        let fft = planner.plan_fft_forward(self.size);
         let buffer = self.buffer.make_contiguous();
-        let input_start = buffer.len() - SIZE;
-        let mut complex_amps = [Complex::new(0f32, 0.0); SIZE];
+        let input_start = buffer.len() - self.size;
+        let mut complex_amps = vec![Complex::new(0f32, 0.0); self.size];
         for (i, amp) in buffer[input_start..].iter().enumerate() {
             complex_amps[i] = *amp;
         }
         fft.process(&mut complex_amps);
-        let mut amps = [0.0; SIZE];
+        let mut amps = vec![0.0; self.size];
         for (i, amp) in complex_amps.iter().enumerate() {
             let mut amp = amp.norm();
             if amp.is_nan() {
@@ -426,11 +428,11 @@ where
     }
 }
 
-impl<S, const SIZE: usize> Iterator for Spectrometer<S, SIZE>
+impl<S> Iterator for Spectrometer<S>
 where
     S: SignalSource,
 {
-    type Item = Spectrum<SIZE>;
+    type Item = Spectrum;
     fn next(&mut self) -> Option<Self::Item> {
         let mut spectrum = self.raw_next()?;
         if let Some(min) = &self.calibration {

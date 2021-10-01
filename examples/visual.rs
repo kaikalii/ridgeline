@@ -8,7 +8,7 @@ fn main() {
     const SAMPLE_SIZE: usize = MAX_FREQ as usize * 2;
     let input = SystemAudio::from_default_device()
         .unwrap()
-        .analyze::<SAMPLE_SIZE>();
+        .analyze(SAMPLE_SIZE);
     let mut silence = Vec::new();
     for spectrum in input {
         let calibrate = silence.is_empty();

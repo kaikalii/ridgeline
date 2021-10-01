@@ -2,14 +2,14 @@
 authors = ['Kai Schmidt <kaikaliischmidt@gmail.com>']
 categories = ['multimedia::audio', 'science']
 description = 'Simple frequency spectrum analysis'
-docs = 'https://docs.rs/ridgeline'
+documentation = 'https://docs.rs/ridgeline'
 edition = '2018'
 keywords = ['signal', 'processing', 'fft', 'dsp', 'audio']
 license = 'MIT'
 name = 'ridgeline'
 readme = 'readme.md'
 repository = 'https://github.com/kaikalii/ridgeline'
-version = '0.1.0'
+version = '0.2.0'
 
 [dependencies]
 rustfft = '6'
