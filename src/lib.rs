@@ -147,6 +147,33 @@ impl Spectrum {
                 amplitude,
             })
     }
+    /// Get all peaks in the spectrum that have greater relative amplitude that the given minimum
+    pub fn peaks(&self, min_amp: f32) -> Vec<SpectrumPoint> {
+        self.peaks_in_range(min_amp, ..)
+    }
+    /// Get all peaks in the spectrum within a frequency range that
+    /// have greater relative amplitude that the given minimum
+    pub fn peaks_in_range(&self, min_amp: f32, range: impl RangeBounds<f32>) -> Vec<SpectrumPoint> {
+        let mut peaks = Vec::new();
+        let mut points = self.amplitudes_in_range(range);
+        let (mut last, mut base) = if let Some(point) = points.next() {
+            (point, point)
+        } else {
+            return peaks;
+        };
+        for point in points {
+            if point.amplitude >= last.amplitude {
+                last = point
+            } else {
+                if last.amplitude - base.amplitude > min_amp {
+                    peaks.push(point);
+                }
+                base = point;
+                last = point;
+            }
+        }
+        peaks
+    }
 }
 
 /// A point on a [`Spectrum`]

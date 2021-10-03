@@ -1,4 +1,8 @@
-use std::{thread::sleep, time::Duration};
+use std::{
+    io::{stdout, Write},
+    thread::sleep,
+    time::Duration,
+};
 
 use ridgeline::*;
 
@@ -10,7 +14,8 @@ fn main() {
     let spectrometer = audio_input.analyze(5000);
     // Print the frequency with the highest amplitude
     for spectrum in spectrometer {
-        println!("{}", spectrum.dominant());
+        print!("\r{}   ", spectrum.dominant());
+        stdout().flush().unwrap();
         sleep(Duration::from_millis(10));
     }
 }
