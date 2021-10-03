@@ -14,7 +14,8 @@ fn main() {
     let spectrometer = audio_input.analyze(5000);
     // Print the frequency with the highest amplitude
     for spectrum in spectrometer {
-        print!("\r{}   ", spectrum.dominant());
+        let dominant = spectrum.dominant();
+        print!("\r{} Hz, {}   ", dominant.frequency, dominant.amplitude);
         stdout().flush().unwrap();
         sleep(Duration::from_millis(10));
     }

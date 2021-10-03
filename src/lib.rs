@@ -101,30 +101,22 @@ impl Spectrum {
         let param = ratio - floor;
         (1.0 - param) * left + param * right
     }
-    /// Get the frequency with the maximum amplitude within some range of frequencies
-    pub fn dominant_in_range(&self, range: impl RangeBounds<f32>) -> f32 {
-        let bucket = self
-            .amps
-            .iter()
-            .take(self.amps.len() / 2)
-            .enumerate()
-            .filter(|&(i, _)| range.contains(&self.frequency_at(i)))
-            .map(|(i, a)| (i, a))
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-            .map(|(bucket, _)| bucket)
-            .unwrap_or(0);
-        bucket as f32 * self.bucket_width()
+    /// Get the spectrum point with the maximum amplitude within some range of frequencies
+    pub fn dominant_in_range(&self, range: impl RangeBounds<f32>) -> SpectrumPoint {
+        self.points_in_range(range)
+            .max_by(|a, b| a.amplitude.partial_cmp(&b.amplitude).unwrap())
+            .unwrap_or_default()
     }
-    /// Get the frequency with the maximum amplitude
-    pub fn dominant(&self) -> f32 {
+    /// Get the spectrum point with the maximum amplitude
+    pub fn dominant(&self) -> SpectrumPoint {
         self.dominant_in_range(..)
     }
     /// Get all spectrum points
-    pub fn amplitudes(&self) -> impl DoubleEndedIterator<Item = SpectrumPoint> + '_ {
-        self.amplitudes_in_range(..)
+    pub fn points(&self) -> impl DoubleEndedIterator<Item = SpectrumPoint> + '_ {
+        self.points_in_range(..)
     }
     /// Get all spectrum points within a frequency range
-    pub fn amplitudes_in_range(
+    pub fn points_in_range(
         &self,
         range: impl RangeBounds<f32>,
     ) -> impl DoubleEndedIterator<Item = SpectrumPoint> + '_ {
@@ -147,30 +139,34 @@ impl Spectrum {
                 amplitude,
             })
     }
-    /// Get all peaks in the spectrum that have greater relative amplitude that the given minimum
+    /// Get all peaks in the spectrum that have greater amplitude that the given minimum
     pub fn peaks(&self, min_amp: f32) -> Vec<SpectrumPoint> {
         self.peaks_in_range(min_amp, ..)
     }
     /// Get all peaks in the spectrum within a frequency range that
-    /// have greater relative amplitude that the given minimum
+    /// have greater amplitude that the given minimum
     pub fn peaks_in_range(&self, min_amp: f32, range: impl RangeBounds<f32>) -> Vec<SpectrumPoint> {
         let mut peaks = Vec::new();
-        let mut points = self.amplitudes_in_range(range);
-        let (mut last, mut base) = if let Some(point) = points.next() {
+        let mut points = self.points_in_range(range);
+        let (mut last, mut last_last) = if let Some(point) = points.next() {
             (point, point)
         } else {
             return peaks;
         };
         for point in points {
-            if point.amplitude >= last.amplitude {
-                last = point
-            } else {
-                if last.amplitude - base.amplitude > min_amp {
-                    peaks.push(point);
-                }
-                base = point;
-                last = point;
+            if point.amplitude < last.amplitude && last.amplitude >= min_amp {
+                let amp_sum = last_last.amplitude + last.amplitude + point.amplitude;
+                let peak = SpectrumPoint {
+                    frequency: (last_last.frequency * last_last.amplitude
+                        + last.frequency * last.amplitude
+                        + point.frequency * point.amplitude)
+                        / amp_sum,
+                    amplitude: amp_sum / 3.0,
+                };
+                peaks.push(peak);
             }
+            last_last = last;
+            last = point;
         }
         peaks
     }
